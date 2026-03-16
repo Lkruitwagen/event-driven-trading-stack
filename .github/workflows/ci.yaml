@@ -1,9 +1,8 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
+    branches: [main]
 
 jobs:
   test:
@@ -16,7 +15,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install dependencies
-        run: uv pip install --system -e ".[dev]"
+        run: uv sync --extra dev
 
       - name: Run tests
-        run: pytest
+        run: uv run pytest
