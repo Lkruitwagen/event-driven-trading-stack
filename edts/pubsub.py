@@ -1,3 +1,6 @@
+import asyncio
+import os
+import signal
 from contextlib import asynccontextmanager
 
 import requests
@@ -90,3 +93,18 @@ async def status(request: Request):
 async def publish(topic: str, message: Message, request: Request):
     request.app.state.pubsub.publish(topic, message)
     return {"message": f"Message published to topic '{topic}'."}
+
+
+@app.get("/health")
+async def health():
+    return {"status": "healthy"}
+
+
+@app.post("/shutdown")
+async def shutdown():
+    async def _shutdown():
+        await asyncio.sleep(0.5)  # let response return first
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    asyncio.create_task(_shutdown())
+    return {"message": "Shutdown initiated."}

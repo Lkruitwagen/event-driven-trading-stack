@@ -8,6 +8,8 @@ dependencies = [
     "pydantic>=2.0",
     "fastapi>=0.115",
     "requests>=2.32",
+    "apscheduler>=3.10",
+    "uvicorn>=0.42.0",
 ]
 
 [project.scripts]
