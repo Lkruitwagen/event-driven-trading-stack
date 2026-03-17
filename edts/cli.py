@@ -38,7 +38,7 @@ def starter(module: str, port: int, output: int | TextIOWrapper, health_check: b
 
 
 def stopper(url: str, pid: int, force: bool = False):
-    # gracefully stop the service
+    # gracefully stop the service, return whether the service existed or not
     try:
         r = requests.post(f"{url}/shutdown")
         r.raise_for_status()
