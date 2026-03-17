@@ -42,9 +42,17 @@ def stopper(url: str, pid: int, force: bool = False):
     try:
         r = requests.post(f"{url}/shutdown")
         r.raise_for_status()
+        return True
+    except requests.exceptions.ConnectionError as e:
+        # connection failed — service may already be offline; verify via PID
+        result = subprocess.run(["kill", "-0", str(pid)], capture_output=True)
+        if result.returncode != 0:
+            return False  # process is gone, nothing to do
+        raise e
     except requests.RequestException as e:
         if force:
             subprocess.run(["kill", str(pid)], check=True)
+            return True
         else:
             raise e
 
@@ -118,8 +126,11 @@ def down(
         pid_info = process_data.get(process_name)
         pid = pid_info["pid"]
         url = pid_info["url"]
-        stopper(url, pid, force)
-        typer.echo(f"{process_name.capitalize()} with PID {pid} stopped.")
+        existed = stopper(url, pid, force)
+        if existed:
+            typer.echo(f"{process_name.capitalize()} with PID {pid} stopped.")
+        else:
+            typer.echo(f"{process_name.capitalize()} with PID {pid} already stopped.")
     typer.echo("Stack stopped successfully.")
 
 
