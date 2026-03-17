@@ -13,17 +13,21 @@ Let's spin up pub/sub services that keep topics/subscribers _in memory_ and hand
 
 ### CLI
 
+To start, try:
+
+    stack --help
+
 Start `DataBus` and `DecisionBus` pubsubs, and the `Trader` process.
 
-    stack start
+    stack up
 
 Start with a given config yaml:
 
-    stack start --config myconfig.yaml
+    stack up --config example.yaml
 
 Choose -foreground (default) /-background:
 
-    stack start --fg
+    stack up --fg
 
 Add a DataGenerator:
 
