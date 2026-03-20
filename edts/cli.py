@@ -78,7 +78,7 @@ def up(
     foreground: bool = typer.Option(
         False,
         "--foreground",
-        "-f",
+        "-fg",
         help="Run the stack in the foreground (logs will be printed to console).",
     ),
 ) -> None:
