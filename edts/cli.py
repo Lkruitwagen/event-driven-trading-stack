@@ -1,3 +1,4 @@
+import os
 import subprocess
 from io import TextIOWrapper
 from time import sleep
@@ -10,13 +11,26 @@ STARTUP_TIMEOUT = 10  # seconds
 
 
 app = typer.Typer(help="Event-driven trading stack CLI.")
+generator_app = typer.Typer(help="Manage generators.")
+app.add_typer(generator_app, name="generator")
+
+GENERATOR_MODULES = {
+    "random_walk": "edts.generators.random_walk:app",
+}
 
 
-def starter(module: str, port: int, output: int | TextIOWrapper, health_check: bool = True):
+def starter(
+    module: str,
+    port: int,
+    output: int | TextIOWrapper,
+    health_check: bool = True,
+    env: dict | None = None,
+):
     p = subprocess.Popen(
         ["uvicorn", f"{module}", "--port", str(port)],
         stdout=output,
         stderr=output,
+        env=env,
     )
     if health_check:
         accumulated_time = 0
@@ -81,9 +95,20 @@ def up(
         "-fg",
         help="Run the stack in the foreground (logs will be printed to console).",
     ),
+    config: str = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Path to a YAML config file specifying generators and strategies to start.",
+    ),
 ) -> None:
     """Start the trading stack."""
     typer.echo("Starting stack...")
+
+    stack_config = {}
+    if config:
+        with open(config, "r") as f:
+            stack_config = yaml.safe_load(f) or {}
 
     log = open("stack.log", "w")
     pids = {}
@@ -91,7 +116,6 @@ def up(
     # start the DataBus
     p = starter("edts.pubsub:app", 8000, log, health_check=True)
     pids["databus"] = {"pid": p.pid, "url": "http://localhost:8000"}
-
     typer.echo(f"DataBus started with PID {p.pid}")
 
     # start the DecisionBus
@@ -103,6 +127,31 @@ def up(
     p = starter("edts.trader:app", 8002, log, health_check=True)
     pids["trader"] = {"pid": p.pid, "url": "http://localhost:8002"}
     typer.echo(f"Trader started with PID {p.pid}")
+
+    # start generators from config
+    for gen_cfg in stack_config.get("generators", []):
+        gen_name = gen_cfg["name"]
+        gen_type = gen_cfg["type"]
+        gen_port = gen_cfg.get("port", 8100)
+        gen_kwargs = gen_cfg.get("kwargs", {})
+
+        if gen_type not in GENERATOR_MODULES:
+            typer.echo(
+                f"""
+                Unknown generator type '{gen_type}' for '{gen_name}'.
+                Available: {list(GENERATOR_MODULES)}"""
+            )
+            raise typer.Exit(1)
+
+        env = {**os.environ, **{k: str(v) for k, v in gen_kwargs.items()}}
+        p = starter(GENERATOR_MODULES[gen_type], gen_port, log, health_check=True, env=env)
+        pids.setdefault("generators", {})[gen_name] = {
+            "pid": p.pid,
+            "url": f"http://localhost:{gen_port}",
+        }
+        typer.echo(
+            f"Generator '{gen_name}' ({gen_type}) started on port {gen_port} with PID {p.pid}."
+        )
 
     with open(".stack.pids.yaml", "w") as f:
         yaml.dump(pids, f)
@@ -122,6 +171,29 @@ def down(
     """Stop the trading stack."""
     typer.echo("Stopping stack...")
     process_data = yaml.load(open(".stack.pids.yaml", "r"), Loader=yaml.SafeLoader)
+
+    active_generators = {
+        name: info
+        for name, info in process_data.get("generators", {}).items()
+        if subprocess.run(["kill", "-0", str(info["pid"])], capture_output=True).returncode == 0
+    }
+    if active_generators and not force:
+        names = list(active_generators)
+        typer.echo(
+            f"Active generators detected: {names}. "
+            "Stop them first with `stack generator remove`, or use `stack down --force`."
+        )
+        raise typer.Exit(1)
+
+    for gen_name, pid_info in active_generators.items():
+        pid = pid_info["pid"]
+        url = pid_info["url"]
+        existed = stopper(url, pid, force)
+        if existed:
+            typer.echo(f"Generator '{gen_name}' with PID {pid} stopped.")
+        else:
+            typer.echo(f"Generator '{gen_name}' with PID {pid} already stopped.")
+
     for process_name in ["trader", "decisionbus", "databus"]:
         pid_info = process_data.get(process_name)
         pid = pid_info["pid"]
@@ -132,6 +204,39 @@ def down(
         else:
             typer.echo(f"{process_name.capitalize()} with PID {pid} already stopped.")
     typer.echo("Stack stopped successfully.")
+
+
+@generator_app.command("add")
+def generator_add(
+    name: str = typer.Argument(..., help="Generator name (e.g. random_walk)"),
+    port: int = typer.Option(8100, "--port", "-p", help="Port to run the generator on."),
+    kwargs: str = typer.Option(
+        "", "--kwargs", "-k", help="Environment variable overrides as KEY=VAL,KEY2=VAL2."
+    ),
+) -> None:
+    """Start a generator and register it with the stack."""
+    if name not in GENERATOR_MODULES:
+        typer.echo(f"Unknown generator '{name}'. Available: {list(GENERATOR_MODULES)}")
+        raise typer.Exit(1)
+
+    env = {**os.environ}
+    if kwargs:
+        for kv in kwargs.split(","):
+            k, v = kv.split("=", 1)
+            env[k.strip()] = v.strip()
+
+    log = open("stack.log", "a")
+    p = starter(GENERATOR_MODULES[name], port, log, health_check=True, env=env)
+    log.close()
+
+    pids = {}
+    if os.path.exists(".stack.pids.yaml"):
+        pids = yaml.load(open(".stack.pids.yaml", "r"), Loader=yaml.SafeLoader) or {}
+    pids.setdefault("generators", {})[name] = {"pid": p.pid, "url": f"http://localhost:{port}"}
+    with open(".stack.pids.yaml", "w") as f:
+        yaml.dump(pids, f)
+
+    typer.echo(f"Generator '{name}' started on port {port} with PID {p.pid}.")
 
 
 @app.command()

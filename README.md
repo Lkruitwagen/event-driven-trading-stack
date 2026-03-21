@@ -75,7 +75,7 @@ Choose --foreground / -fg to stream logs to the console:
 
 Add a DataGenerator:
 
-    stack generator start <id>
+    stack generator add <id>
 
 Drop a DataGenerator:
 

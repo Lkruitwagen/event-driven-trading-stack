@@ -3,6 +3,7 @@ import os
 import signal
 from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
+from urllib.parse import urlparse
 
 import requests
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -22,6 +23,14 @@ class Generator(ABC):
     @abstractmethod
     def generate(self) -> Message: ...
 
+    def _register_topic(self):
+        parsed = urlparse(self.topic_url)
+        base_url = f"{parsed.scheme}://{parsed.netloc}"
+        topic = parsed.path.rstrip("/").split("/")[-1]
+        r = requests.post(f"{base_url}/topic/{topic}")
+        r.raise_for_status()
+        logger.info(f"Registered topic '{topic}' on {base_url}")
+
     def _tick(self):
         message = self.generate()
         r = requests.post(self.topic_url, json=message.model_dump())
@@ -34,6 +43,7 @@ class Generator(ABC):
         @asynccontextmanager
         async def lifespan(app: FastAPI):
             logger.info(f"Starting Generator service ({self.__class__.__name__})...")
+            self._register_topic()
             scheduler.add_job(self._tick, "interval", seconds=self.interval_seconds)
             scheduler.start()
             yield
