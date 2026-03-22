@@ -1,0 +1,11 @@
+generators:
+  - name: prices
+    type: random_walk
+    port: 8100
+    kwargs:
+      TOPIC_URL: http://localhost:8000/publish/prices
+      INTERVAL_SECONDS: 5
+      INITIAL_VALUE: 100.0
+      MU: 100.0
+      THETA: 0.1
+      SIGMA: 1.0

@@ -10,7 +10,6 @@ from fastapi import FastAPI
 from edts.common import get_logger
 
 logger = get_logger(__name__)
-scheduler = AsyncIOScheduler()
 
 
 class Trader:
@@ -27,31 +26,35 @@ class Trader:
         logger.info(f"Executing trades at {tick_time.isoformat()}...")
         return {"status": "success"}
 
+    def make_app(self) -> FastAPI:
+        scheduler = AsyncIOScheduler()
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    logger.info("Starting Trader service...")
-    app.state.trader = Trader()
-    scheduler.add_job(app.state.trader.execute_trades, "interval", seconds=5)
-    scheduler.start()
-    yield
-    scheduler.shutdown()
-    logger.info("Shutting down Trader service...")
+        @asynccontextmanager
+        async def lifespan(app: FastAPI):
+            logger.info("Starting Trader service...")
+            scheduler.add_job(self.execute_trades, "interval", seconds=5)
+            scheduler.start()
+            yield
+            scheduler.shutdown()
+            logger.info("Shutting down Trader service...")
+
+        app = FastAPI(lifespan=lifespan)
+
+        @app.get("/health")
+        async def health():
+            return {"status": "healthy"}
+
+        @app.post("/shutdown")
+        async def shutdown():
+            async def _shutdown():
+                await asyncio.sleep(0.5)  # let response return first
+                os.kill(os.getpid(), signal.SIGTERM)
+
+            asyncio.create_task(_shutdown())
+            return {"message": "Shutdown initiated."}
+
+        return app
 
 
-app = FastAPI(lifespan=lifespan)
-
-
-@app.get("/health")
-async def health():
-    return {"status": "healthy"}
-
-
-@app.post("/shutdown")
-async def shutdown():
-    async def _shutdown():
-        await asyncio.sleep(0.5)  # let response return first
-        os.kill(os.getpid(), signal.SIGTERM)
-
-    asyncio.create_task(_shutdown())
-    return {"message": "Shutdown initiated."}
+trader = Trader()
+app = trader.make_app()
