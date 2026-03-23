@@ -282,6 +282,26 @@ def down(
     typer.echo("Stack stopped successfully.")
 
 
+def _load_pids() -> dict:
+    if os.path.exists(".stack.pids.yaml"):
+        return yaml.load(open(".stack.pids.yaml", "r"), Loader=yaml.SafeLoader) or {}
+    return {}
+
+
+def _save_pids(pids: dict) -> None:
+    with open(".stack.pids.yaml", "w") as f:
+        yaml.dump(pids, f)
+
+
+def _parse_kwargs(kwargs: str) -> dict:
+    env = {**os.environ}
+    if kwargs:
+        for kv in kwargs.split(","):
+            k, v = kv.split("=", 1)
+            env[k.strip()] = v.strip()
+    return env
+
+
 @generator_app.command("add")
 def generator_add(
     name: str = typer.Argument(..., help="Generator name (e.g. random_walk)"),
@@ -295,30 +315,105 @@ def generator_add(
         typer.echo(f"Unknown generator '{name}'. Available: {list(GENERATOR_MODULES)}")
         raise typer.Exit(1)
 
-    env = {**os.environ}
-    if kwargs:
-        for kv in kwargs.split(","):
-            k, v = kv.split("=", 1)
-            env[k.strip()] = v.strip()
-
     log = open("stack.log", "a")
-    p = starter(GENERATOR_MODULES[name], port, log, health_check=True, env=env)
+    p = starter(GENERATOR_MODULES[name], port, log, health_check=True, env=_parse_kwargs(kwargs))
     log.close()
 
-    pids = {}
-    if os.path.exists(".stack.pids.yaml"):
-        pids = yaml.load(open(".stack.pids.yaml", "r"), Loader=yaml.SafeLoader) or {}
+    pids = _load_pids()
     pids.setdefault("generators", {})[name] = {"pid": p.pid, "url": f"http://localhost:{port}"}
-    with open(".stack.pids.yaml", "w") as f:
-        yaml.dump(pids, f)
+    _save_pids(pids)
 
     typer.echo(f"Generator '{name}' started on port {port} with PID {p.pid}.")
 
 
-@app.command()
-def status() -> None:
-    """Show the status of the trading stack."""
-    typer.echo("Stack status: not implemented")
+@generator_app.command("remove")
+def generator_remove(
+    name: str = typer.Argument(..., help="Generator name to stop."),
+    force: bool = typer.Option(False, "--force", "-f", help="Force kill if graceful stop fails."),
+) -> None:
+    """Stop a running generator and remove it from the stack."""
+    pids = _load_pids()
+    pid_info = pids.get("generators", {}).get(name)
+    if pid_info is None:
+        typer.echo(f"Generator '{name}' not found in stack.")
+        raise typer.Exit(1)
+
+    existed = stopper(pid_info["url"], pid_info["pid"], force)
+    if existed:
+        typer.echo(f"Generator '{name}' with PID {pid_info['pid']} stopped.")
+    else:
+        typer.echo(f"Generator '{name}' with PID {pid_info['pid']} was already stopped.")
+
+    del pids["generators"][name]
+    _save_pids(pids)
+
+
+@strategy_app.command("add")
+def strategy_add(
+    name: str = typer.Argument(..., help="Strategy name (e.g. mean_reversion)"),
+    port: int = typer.Option(8200, "--port", "-p", help="Port to run the strategy on."),
+    subscribe_bus_url: str = typer.Option(
+        ..., "--subscribe-bus-url", help="PubSub URL to subscribe to for incoming messages."
+    ),
+    subscribe_topic: str = typer.Option(
+        ..., "--subscribe-topic", help="Topic on the subscribe bus to listen to."
+    ),
+    kwargs: str = typer.Option(
+        "", "--kwargs", "-k", help="Environment variable overrides as KEY=VAL,KEY2=VAL2."
+    ),
+) -> None:
+    """Start a strategy, register its publish topic, and subscribe it to the input topic."""
+    if name not in STRATEGY_MODULES:
+        typer.echo(f"Unknown strategy '{name}'. Available: {list(STRATEGY_MODULES)}")
+        raise typer.Exit(1)
+
+    env = _parse_kwargs(kwargs)
+    log = open("stack.log", "a")
+    p = starter(STRATEGY_MODULES[name], port, log, health_check=True, env=env)
+    log.close()
+
+    pids = _load_pids()
+    pids.setdefault("strategies", {})[name] = {"pid": p.pid, "url": f"http://localhost:{port}"}
+    _save_pids(pids)
+    typer.echo(f"Strategy '{name}' started on port {port} with PID {p.pid}.")
+
+    # register publish topic on the DecisionBus
+    publish_bus_url = env["PUBSUB_URL"].rstrip("/")
+    publish_topic = env["PUBLISH_TOPIC"]
+    r = requests.post(f"{publish_bus_url}/topic/{publish_topic}")
+    r.raise_for_status()
+    typer.echo(f"Registered topic '{publish_topic}' on {publish_bus_url}.")
+
+    # subscribe strategy to the input topic
+    receive_url = f"http://localhost:{port}/message"
+    r = requests.post(
+        f"{subscribe_bus_url.rstrip('/')}/subscribe/{subscribe_topic}",
+        params={"subscriber": receive_url},
+    )
+    r.raise_for_status()
+    typer.echo(f"Subscribed '{receive_url}' to '{subscribe_topic}' on {subscribe_bus_url}.")
+
+
+@strategy_app.command("remove")
+def strategy_remove(
+    name: str = typer.Argument(..., help="Strategy name to stop."),
+    force: bool = typer.Option(False, "--force", "-f", help="Force kill if graceful stop fails."),
+) -> None:
+    """Stop a running strategy and remove it from the stack."""
+    pids = _load_pids()
+    pid_info = pids.get("strategies", {}).get(name)
+    if pid_info is None:
+        typer.echo(f"Strategy '{name}' not found in stack.")
+        raise typer.Exit(1)
+
+    existed = stopper(pid_info["url"], pid_info["pid"], force)
+    if existed:
+        typer.echo(f"Strategy '{name}' with PID {pid_info['pid']} stopped.")
+    else:
+        typer.echo(f"Strategy '{name}' with PID {pid_info['pid']} was already stopped.")
+
+    del pids["strategies"][name]
+    _save_pids(pids)
 
 
 @app.command()

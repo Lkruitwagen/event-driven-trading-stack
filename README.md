@@ -53,6 +53,10 @@ source .venv/bin/activate
 uv pip install -e .
 ```
 
+Now you can pull up the stack with an example configuration:
+
+    stack up --config example.yaml --foreground
+
 ## Useage
 
 ### CLI
@@ -71,23 +75,23 @@ Start with a given config yaml:
 
 Choose --foreground / -fg to stream logs to the console:
 
-    stack up -foreground
+    stack up --foreground
 
-Add a DataGenerator:
+Add a generator:
 
-    stack generator add <id>
+    stack generator add <type> --port <port> --kwargs KEY=VAL,KEY2=VAL2
 
-Drop a DataGenerator:
+Remove a generator:
 
-    stack generator stop <id>
+    stack generator remove <name>
 
-Start a Strategy:
+Add a strategy:
 
-    stack strategy start <id>
+    stack strategy add <type> --port <port> --subscribe-bus-url <url> --subscribe-topic <topic> --kwargs KEY=VAL,KEY2=VAL2
 
-Drop a Strategy:
+Remove a strategy:
 
-    stack strategy stop <id>
+    stack strategy remove <name>
 
 Check the running stack status:
 
@@ -95,10 +99,18 @@ Check the running stack status:
 
 Stop the running stack:
 
-    stack stop
+    stack down
+
+You can't pull the stack down if there are strategies or generators running. 
+Force all to shutdown with:
+
+    stack down --force
 
 ### Config Object
 
+The config object allows multiple generators and strategies to be described and spun-up with the trading stack.
+
+See [example.yaml](example.yaml) for an example.
 
 
 ## Development
