@@ -12,13 +12,12 @@ from fastapi import FastAPI
 from edts.common import get_logger
 from edts.protocols import Message
 
-logger = get_logger(__name__)
-
 
 class Generator(ABC):
-    def __init__(self, topic_url: str, interval_seconds: int = 5):
+    def __init__(self, topic_url: str, interval_seconds: int = 5, name: str | None = None):
         self.topic_url = topic_url
         self.interval_seconds = interval_seconds
+        self.logger = get_logger(f"{type(self).__module__}.{name or type(self).__name__}")
 
     @abstractmethod
     def generate(self) -> Message: ...
@@ -29,26 +28,28 @@ class Generator(ABC):
         topic = parsed.path.rstrip("/").split("/")[-1]
         r = requests.post(f"{base_url}/topic/{topic}")
         r.raise_for_status()
-        logger.info(f"Registered topic '{topic}' on {base_url}")
+        self.logger.info(f"Registered topic '{topic}' on {base_url}")
 
     def _tick(self):
         message = self.generate()
         r = requests.post(self.topic_url, json=message.model_dump())
         r.raise_for_status()
-        logger.info(f"Published message to {self.topic_url}: {message.model_dump_json()[:40]}...")
+        self.logger.info(
+            f"Published message to {self.topic_url}: {message.model_dump_json()[:40]}..."
+        )
 
     def make_app(self) -> FastAPI:
         scheduler = AsyncIOScheduler()
 
         @asynccontextmanager
         async def lifespan(app: FastAPI):
-            logger.info(f"Starting Generator service ({self.__class__.__name__})...")
+            self.logger.info(f"Starting Generator service ({self.__class__.__name__})...")
             self._register_topic()
             scheduler.add_job(self._tick, "interval", seconds=self.interval_seconds)
             scheduler.start()
             yield
             scheduler.shutdown()
-            logger.info("Shutting down Generator service...")
+            self.logger.info("Shutting down Generator service...")
 
         app = FastAPI(lifespan=lifespan)
 

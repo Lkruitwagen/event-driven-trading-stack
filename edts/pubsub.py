@@ -9,17 +9,16 @@ from fastapi import FastAPI
 from edts.common import get_logger
 from edts.protocols import Message
 
-logger = get_logger(__name__)
-
 
 class PubSub:
     """
     Simple in-memory Pub/Sub system.
     """
 
-    def __init__(self):
+    def __init__(self, name: str = "pubsub"):
         self.topics = {}  # topic: set of subscriber ids
         self.subscribers = {}  # id: url
+        self.logger = get_logger(f"{type(self).__module__}.{name}")
 
     def new_topic(self, topic):
         if topic not in self.topics:
@@ -40,26 +39,22 @@ class PubSub:
         if topic not in self.topics:
             raise ValueError(f"Topic '{topic}' does not exist.")
 
-        logger.info(
-            f"Publishing message to topic '{topic}' with {len(self.topics[topic])} subscribers."
+        self.logger.info(
+            f"""Publishing message {message.model_dump_json()[0:50]}... \n
+            to topic '{topic}' \n with subscribers {self.topics[topic]}
+            """
         )
 
         for subscriber_id in self.topics[topic]:
             r = requests.post(self.subscribers[subscriber_id], json=message.model_dump())
             r.raise_for_status()
-            logger.info(
-                f"""Topic {topic}:
-                    Published message to subscriber {subscriber_id}:
-                        {message.model_dump_json()[0:20]}...
-                """
-            )
 
     def make_app(self) -> FastAPI:
         @asynccontextmanager
         async def lifespan(app: FastAPI):
-            logger.info("Starting Pub/Sub service...")
+            self.logger.info("Starting Pub/Sub service...")
             yield
-            logger.info("Shutting down Pub/Sub service...")
+            self.logger.info("Shutting down Pub/Sub service...")
 
         app = FastAPI(lifespan=lifespan)
 
@@ -107,5 +102,5 @@ class PubSub:
         return app
 
 
-pubsub = PubSub()
+pubsub = PubSub(name=os.environ.get("NAME", "pubsub"))
 app = pubsub.make_app()

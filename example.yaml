@@ -3,9 +3,23 @@ generators:
     type: random_walk
     port: 8100
     kwargs:
+      NAME: prices
       TOPIC_URL: http://localhost:8000/publish/prices
       INTERVAL_SECONDS: 5
       INITIAL_VALUE: 100.0
       MU: 100.0
       THETA: 0.1
       SIGMA: 1.0
+
+strategies:
+  - name: mean_reversion
+    type: mean_reversion
+    port: 8200
+    subscribe_bus_url: http://localhost:8000  # DataBus — subscribe to price feed
+    subscribe_topic: prices
+    kwargs:
+      NAME: mean_reversion
+      PUBSUB_URL: http://localhost:8001        # DecisionBus — publish signals here
+      PUBLISH_TOPIC: trader
+      SELF_URL: http://localhost:8200
+      INTERVAL_SECONDS: 5
