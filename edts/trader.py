@@ -1,6 +1,7 @@
 import asyncio
 import os
 import signal
+from collections import Counter
 from contextlib import asynccontextmanager
 from datetime import datetime
 
@@ -8,37 +9,52 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI
 
 from edts.common import get_logger
-
-logger = get_logger(__name__)
+from edts.protocols import Message
 
 
 class Trader:
     """Trader model representing the trade execution logic."""
 
     def __init__(self, _id: str = "trader"):
-        self._id = _id  # Unique identifier for the trader
+        self._id = _id
+        self._cache: list[str] = []
+        self.logger = get_logger(f"{type(self).__module__}.{self._id}")
 
     def execute_trades(self) -> dict:
-        """Execute a trade based on the given trade signal."""
         tick_time = datetime.now()
-        # Implement trade execution logic here
 
-        logger.info(f"Executing trades at {tick_time.isoformat()}...")
-        return {"status": "success"}
+        if not self._cache:
+            self.logger.info(f"No signals received at {tick_time.isoformat()}, skipping.")
+            return {"status": "no_signals"}
+
+        counts = Counter(self._cache)
+        mode_signal = counts.most_common(1)[0][0]
+        self._cache.clear()
+
+        self.logger.info(
+            f"Executing trades at {tick_time.isoformat()}: \n"
+            + f"mode signal = '{mode_signal}' (counts: {dict(counts)})"
+        )
+        return {"status": "success", "signal": mode_signal}
 
     def make_app(self) -> FastAPI:
         scheduler = AsyncIOScheduler()
 
         @asynccontextmanager
         async def lifespan(app: FastAPI):
-            logger.info("Starting Trader service...")
+            self.logger.info("Starting Trader service...")
             scheduler.add_job(self.execute_trades, "interval", seconds=5)
             scheduler.start()
             yield
             scheduler.shutdown()
-            logger.info("Shutting down Trader service...")
+            self.logger.info("Shutting down Trader service...")
 
         app = FastAPI(lifespan=lifespan)
+
+        @app.post("/message")
+        async def receive_message(message: Message):
+            self._cache.append(str(message.content))
+            return {"status": "ok"}
 
         @app.get("/health")
         async def health():

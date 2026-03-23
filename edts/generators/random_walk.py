@@ -14,8 +14,9 @@ class RandomWalkMeanReversionGenerator(Generator):
         mu: float = 100.0,
         theta: float = 0.1,
         sigma: float = 1.0,
+        name: str | None = None,
     ):
-        super().__init__(topic_url, interval_seconds)
+        super().__init__(topic_url, interval_seconds, name)
         self.value = initial_value
         self.mu = mu
         self.theta = theta
@@ -35,5 +36,6 @@ gen = RandomWalkMeanReversionGenerator(
     mu=float(os.environ.get("MU", "100.0")),
     theta=float(os.environ.get("THETA", "0.1")),
     sigma=float(os.environ.get("SIGMA", "1.0")),
+    name=os.environ.get("NAME", "random_walk"),
 )
 app = gen.make_app()

@@ -12,10 +12,16 @@ STARTUP_TIMEOUT = 10  # seconds
 
 app = typer.Typer(help="Event-driven trading stack CLI.")
 generator_app = typer.Typer(help="Manage generators.")
+strategy_app = typer.Typer(help="Manage strategies.")
 app.add_typer(generator_app, name="generator")
+app.add_typer(strategy_app, name="strategy")
 
 GENERATOR_MODULES = {
     "random_walk": "edts.generators.random_walk:app",
+}
+
+STRATEGY_MODULES = {
+    "mean_reversion": "edts.strategies.mean_reversion:app",
 }
 
 
@@ -114,12 +120,16 @@ def up(
     pids = {}
 
     # start the DataBus
-    p = starter("edts.pubsub:app", 8000, log, health_check=True)
+    p = starter(
+        "edts.pubsub:app", 8000, log, health_check=True, env={**os.environ, "NAME": "databus"}
+    )
     pids["databus"] = {"pid": p.pid, "url": "http://localhost:8000"}
     typer.echo(f"DataBus started with PID {p.pid}")
 
     # start the DecisionBus
-    p = starter("edts.pubsub:app", 8001, log, health_check=True)
+    p = starter(
+        "edts.pubsub:app", 8001, log, health_check=True, env={**os.environ, "NAME": "decisionbus"}
+    )
     pids["decisionbus"] = {"pid": p.pid, "url": "http://localhost:8001"}
     typer.echo(f"DecisionBus started with PID {p.pid}")
 
@@ -127,6 +137,16 @@ def up(
     p = starter("edts.trader:app", 8002, log, health_check=True)
     pids["trader"] = {"pid": p.pid, "url": "http://localhost:8002"}
     typer.echo(f"Trader started with PID {p.pid}")
+
+    # register trader as subscriber to the 'trader' topic on the DecisionBus
+    r = requests.post("http://localhost:8001/topic/trader")
+    r.raise_for_status()
+    r = requests.post(
+        "http://localhost:8001/subscribe/trader",
+        params={"subscriber": "http://localhost:8002/message"},
+    )
+    r.raise_for_status()
+    typer.echo("Trader subscribed to 'trader' topic on DecisionBus.")
 
     # start generators from config
     for gen_cfg in stack_config.get("generators", []):
@@ -153,6 +173,48 @@ def up(
             f"Generator '{gen_name}' ({gen_type}) started on port {gen_port} with PID {p.pid}."
         )
 
+    # start strategies from config
+    for strat_cfg in stack_config.get("strategies", []):
+        strat_name = strat_cfg["name"]
+        strat_type = strat_cfg["type"]
+        strat_port = strat_cfg.get("port", 8200)
+        strat_kwargs = strat_cfg.get("kwargs", {})
+        subscribe_bus_url = strat_cfg["subscribe_bus_url"].rstrip("/")
+        subscribe_topic = strat_cfg["subscribe_topic"]
+
+        if strat_type not in STRATEGY_MODULES:
+            typer.echo(
+                f"Unknown strategy type '{strat_type}' for '{strat_name}'. "
+                f"Available: {list(STRATEGY_MODULES)}"
+            )
+            raise typer.Exit(1)
+
+        env = {**os.environ, **{k: str(v) for k, v in strat_kwargs.items()}}
+        p = starter(STRATEGY_MODULES[strat_type], strat_port, log, health_check=True, env=env)
+        pids.setdefault("strategies", {})[strat_name] = {
+            "pid": p.pid,
+            "url": f"http://localhost:{strat_port}",
+        }
+        typer.echo(
+            f"Strategy '{strat_name}' ({strat_type}) started on port {strat_port} with PID {p.pid}."
+        )
+
+        # register publish topic on the DecisionBus
+        publish_bus_url = strat_kwargs["PUBSUB_URL"].rstrip("/")
+        publish_topic = strat_kwargs["PUBLISH_TOPIC"]
+        r = requests.post(f"{publish_bus_url}/topic/{publish_topic}")
+        r.raise_for_status()
+        typer.echo(f"Registered topic '{publish_topic}' on {publish_bus_url}.")
+
+        # subscribe strategy to the input topic on the DataBus
+        receive_url = f"http://localhost:{strat_port}/message"
+        r = requests.post(
+            f"{subscribe_bus_url}/subscribe/{subscribe_topic}",
+            params={"subscriber": receive_url},
+        )
+        r.raise_for_status()
+        typer.echo(f"Subscribed '{receive_url}' to '{subscribe_topic}' on {subscribe_bus_url}.")
+
     with open(".stack.pids.yaml", "w") as f:
         yaml.dump(pids, f)
     typer.echo("Stack started successfully.")
@@ -172,18 +234,32 @@ def down(
     typer.echo("Stopping stack...")
     process_data = yaml.load(open(".stack.pids.yaml", "r"), Loader=yaml.SafeLoader)
 
-    active_generators = {
-        name: info
-        for name, info in process_data.get("generators", {}).items()
-        if subprocess.run(["kill", "-0", str(info["pid"])], capture_output=True).returncode == 0
-    }
-    if active_generators and not force:
-        names = list(active_generators)
+    def _active(services: dict) -> dict:
+        return {
+            name: info
+            for name, info in services.items()
+            if subprocess.run(["kill", "-0", str(info["pid"])], capture_output=True).returncode == 0
+        }
+
+    active_generators = _active(process_data.get("generators", {}))
+    active_strategies = _active(process_data.get("strategies", {}))
+
+    if (active_generators or active_strategies) and not force:
+        names = list(active_generators) + list(active_strategies)
         typer.echo(
-            f"Active generators detected: {names}. "
-            "Stop them first with `stack generator remove`, or use `stack down --force`."
+            f"Active generators/strategies detected: {names}. "
+            "Stop them first, or use `stack down --force`."
         )
         raise typer.Exit(1)
+
+    for strat_name, pid_info in active_strategies.items():
+        pid = pid_info["pid"]
+        url = pid_info["url"]
+        existed = stopper(url, pid, force)
+        if existed:
+            typer.echo(f"Strategy '{strat_name}' with PID {pid} stopped.")
+        else:
+            typer.echo(f"Strategy '{strat_name}' with PID {pid} already stopped.")
 
     for gen_name, pid_info in active_generators.items():
         pid = pid_info["pid"]
